@@ -4,8 +4,6 @@ use anyhow::Result;
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 
-const AUTO_INDEX_TTL: u64 = 5;
-
 pub fn run(path: Option<PathBuf>, json: bool, _no_auto_index: bool) -> Result<()> {
     let cwd = path.unwrap_or(std::env::current_dir()?);
     let root = repo::find_root(&cwd)?;
@@ -13,7 +11,7 @@ pub fn run(path: Option<PathBuf>, json: bool, _no_auto_index: bool) -> Result<()
     let mut conn = db::open(&paths.db)?;
     let mut search = SearchIndex::open(&paths.tantivy)?;
     // `index` always forces a reindex regardless of TTL.
-    let report = sync::run_if_stale(&mut conn, &mut search, &root, AUTO_INDEX_TTL, true)?;
+    let report = sync::run_if_stale(&mut conn, &mut search, &root, sync::AUTO_INDEX_TTL, true)?;
     let rows = fetch_rows(&conn)?;
     if json {
         let mut v = render_json_value(&root, &rows);

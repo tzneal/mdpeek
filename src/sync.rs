@@ -10,6 +10,10 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Seconds between auto-index freshness scans. Commands other than `index`
+/// short-circuit the walk when `now - last_scan_unix < AUTO_INDEX_TTL`.
+pub const AUTO_INDEX_TTL: u64 = 5;
+
 /// Summary of one sync pass.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SyncReport {
