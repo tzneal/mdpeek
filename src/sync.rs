@@ -129,12 +129,27 @@ fn upsert_one(
             is_markdown,
         },
     )?;
-    for (seq, sec) in sections.iter().enumerate() {
+    // Deduplicate section IDs: when two sections in the same doc have
+    // identical content they produce the same hash.  Append a counter
+    // suffix to make each ID unique within the doc.
+    let mut id_counts: HashMap<String, usize> = HashMap::new();
+    let mut final_ids: Vec<String> = Vec::with_capacity(sections.len());
+    for sec in &sections {
+        let n = id_counts.entry(sec.id.clone()).or_insert(0);
+        final_ids.push(if *n == 0 {
+            sec.id.clone()
+        } else {
+            format!("{}_{n}", &sec.id[..4])
+        });
+        *n += 1;
+    }
+
+    for (seq, (sec, sid)) in sections.iter().zip(final_ids.iter()).enumerate() {
         db::insert_section(
             conn,
             &SectionRow {
                 doc_id: id.clone(),
-                section_id: sec.id.clone(),
+                section_id: sid.clone(),
                 seq: seq as i64,
                 level: sec.level as i64,
                 heading: sec.heading.clone(),
