@@ -32,6 +32,7 @@ mdpeek search "query" --include-content  # embed full section content
 ```
 
 Add `--json` to any command for structured output.
+Use `-C <path>` to run against a different directory (like `git -C`).
 
 ## Three layers
 

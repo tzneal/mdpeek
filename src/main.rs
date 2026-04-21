@@ -29,6 +29,9 @@ struct Cli {
     /// Skip the pre-flight freshness scan
     #[arg(long, global = true)]
     no_auto_index: bool,
+    /// Run as if started in <PATH> instead of cwd
+    #[arg(short = 'C', global = true, value_name = "PATH")]
+    directory: Option<std::path::PathBuf>,
     /// Print a single comprehensive reference for LLM consumption, then exit
     #[arg(long)]
     llm_help: bool,
@@ -173,6 +176,7 @@ COMMANDS
       mdpeek ignore --clear              # clear all
 
 GLOBAL FLAGS
+  -C <PATH>          Run as if started in <PATH> instead of cwd
   --json             Emit JSON instead of plain text
   --no-auto-index    Skip the pre-flight freshness scan (use stale cache)
   --llm-help         Print this reference and exit
@@ -213,6 +217,12 @@ fn main() {
     if cli.llm_help {
         print!("{LLM_HELP}");
         return;
+    }
+    if let Some(dir) = &cli.directory
+        && let Err(e) = std::env::set_current_dir(dir)
+    {
+        eprintln!("error: -C {}: {e}", dir.display());
+        std::process::exit(1);
     }
     let Some(cmd) = cli.cmd else {
         eprintln!("error: a subcommand is required (use --help or --llm-help)");
