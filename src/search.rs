@@ -204,7 +204,7 @@ impl SearchIndex {
                 .with_context(|| format!("create {}", dir.display()))?
         };
         register_analyzer(&index);
-        let writer: IndexWriter = index.writer(WRITER_MEM)?;
+        let writer: IndexWriter = open_writer(&index)?;
         let s = index.schema();
         Ok(Self {
             f_doc_id: s.get_field("doc_id")?,
@@ -300,6 +300,24 @@ impl SearchIndex {
 fn first_text(d: &TantivyDocument, f: Field) -> Option<String> {
     use tantivy::schema::Value;
     d.get_first(f).and_then(|v| v.as_str().map(String::from))
+}
+
+/// Acquire the tantivy IndexWriter, retrying on LockBusy for up to ~3s.
+fn open_writer(index: &Index) -> Result<IndexWriter> {
+    use backon::{BlockingRetryable, ExponentialBuilder};
+    use tantivy::TantivyError;
+    use tantivy::directory::error::LockError;
+
+    let backoff = ExponentialBuilder::new()
+        .with_min_delay(std::time::Duration::from_millis(100))
+        .with_max_delay(std::time::Duration::from_secs(1))
+        .with_total_delay(Some(std::time::Duration::from_secs(3)));
+
+    (|| index.writer(WRITER_MEM))
+        .retry(backoff)
+        .when(|e| matches!(e, TantivyError::LockFailure(LockError::LockBusy, _)))
+        .call()
+        .context("acquire tantivy index writer")
 }
 
 fn build_schema() -> Schema {
