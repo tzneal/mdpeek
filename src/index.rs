@@ -76,13 +76,18 @@ fn render_text(rows: &[(DocRow, i64)]) -> String {
                 format!("{}/", row.dir)
             };
             out.push_str(&format!("{label}\n"));
-            out.push_str("| ID       | Title                          | Tokens | Modified   |\n");
-            out.push_str("|----------|--------------------------------|--------|------------|\n");
+            out.push_str("| ID       | File                 | Title                          | Tokens | Modified   |\n");
+            out.push_str("|----------|----------------------|--------------------------------|--------|------------|\n");
             cur_dir = Some(row.dir.as_str());
         }
+        let filename = Path::new(&row.rel_path)
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy();
         out.push_str(&format!(
-            "| {:<8} | {:<30} | {:>6} | {} |\n",
+            "| {:<8} | {:<20} | {:<30} | {:>6} | {} |\n",
             row.doc_id,
+            truncate(&filename, 20),
             truncate(&row.title, 30),
             row.tokens,
             format_date(row.mtime_unix),
@@ -98,9 +103,15 @@ fn render_json_value(root: &Path, rows: &[(DocRow, i64)]) -> serde_json::Value {
     let mut groups: Vec<serde_json::Value> = Vec::new();
     let mut cur: Option<(String, Vec<serde_json::Value>)> = None;
     for (row, section_count) in rows {
+        let filename = Path::new(&row.rel_path)
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
         let doc = json!({
             "id": row.doc_id,
             "path": row.rel_path,
+            "file": filename,
             "title": row.title,
             "tokens": row.tokens,
             "section_count": section_count,
@@ -200,6 +211,9 @@ mod tests {
         assert!(out.contains("Intro"));
         // One header per group, not per row.
         assert_eq!(out.matches("| ID       |").count(), 2);
+        // Filename column present.
+        assert!(out.contains("| File"));
+        assert!(out.contains("aaaaaaaa.md"));
     }
 
     #[test]
@@ -211,6 +225,7 @@ mod tests {
         assert_eq!(v["total_tokens"], 1243);
         assert_eq!(v["groups"][0]["dir"], "docs");
         assert_eq!(v["groups"][0]["docs"][0]["id"], "a3f1b208");
+        assert_eq!(v["groups"][0]["docs"][0]["file"], "a3f1b208.md");
         assert_eq!(v["groups"][0]["docs"][0]["title"], "Getting Started");
         assert_eq!(v["groups"][0]["docs"][0]["section_count"], 3);
         assert_eq!(
