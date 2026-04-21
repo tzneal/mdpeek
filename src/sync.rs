@@ -3,7 +3,8 @@ use crate::id::doc_id;
 use crate::parse::{self, Section};
 use crate::repo;
 use crate::search::SearchIndex;
-use anyhow::{Context, Result};
+use anyhow::Result;
+use rayon::prelude::*;
 use rusqlite::Connection;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -19,6 +20,26 @@ pub struct SyncReport {
     pub skipped_binary: Vec<String>,
     /// True when TTL short-circuited the walk.
     pub skipped: bool,
+}
+
+/// Result of reading + parsing a single file (CPU-heavy, parallelizable).
+struct Prepared {
+    rel: String,
+    doc_id: String,
+    dir: String,
+    title: String,
+    total_tokens: i64,
+    mtime: i64,
+    size: i64,
+    is_markdown: bool,
+    sections: Vec<Section>,
+    is_new: bool,
+}
+
+enum FileOutcome {
+    Unchanged(String),
+    Binary(String),
+    Ready(Prepared),
 }
 
 /// Run the staleness pass. Short-circuits if `now - last_scan_unix < ttl_secs`
@@ -47,30 +68,36 @@ pub fn run_if_stale(
         .map(|s| (s.rel_path.clone(), s))
         .collect();
 
+    // Phase 1: read + parse in parallel.
+    let outcomes: Vec<FileOutcome> = paths
+        .par_iter()
+        .map(|abs| prepare_one(repo_root, abs, &existing))
+        .collect();
+
+    // Phase 2: commit to sqlite + tantivy serially.
     let mut seen = std::collections::HashSet::with_capacity(paths.len());
     let mut report = SyncReport::default();
 
     let tx = conn.transaction()?;
-    for abs in &paths {
-        let rel = rel_path(repo_root, abs);
-        seen.insert(rel.clone());
-        let meta = std::fs::metadata(abs).with_context(|| format!("stat {}", abs.display()))?;
-        let mtime = mtime_unix(&meta);
-        let size = meta.len() as i64;
-
-        // Skip binary (non-UTF-8) files early.
-        let bytes = std::fs::read(abs).with_context(|| format!("read {}", abs.display()))?;
-        if std::str::from_utf8(&bytes).is_err() {
-            report.skipped_binary.push(rel);
-            continue;
+    for outcome in outcomes {
+        match outcome {
+            FileOutcome::Unchanged(rel) => {
+                seen.insert(rel);
+            }
+            FileOutcome::Binary(rel) => {
+                seen.insert(rel.clone());
+                report.skipped_binary.push(rel);
+            }
+            FileOutcome::Ready(p) => {
+                seen.insert(p.rel.clone());
+                if p.is_new {
+                    report.added += 1;
+                } else {
+                    report.changed += 1;
+                }
+                commit_one(&tx, search, &p)?;
+            }
         }
-
-        match existing.get(&rel) {
-            Some(s) if s.mtime_unix == mtime && s.size_bytes == size => continue,
-            Some(_) => report.changed += 1,
-            None => report.added += 1,
-        }
-        upsert_one(&tx, search, abs, &rel, &bytes, mtime, size)?;
     }
 
     // Removed: in db but not in walk.
@@ -88,15 +115,35 @@ pub fn run_if_stale(
     Ok(report)
 }
 
-fn upsert_one(
-    conn: &Connection,
-    search: &SearchIndex,
-    abs: &Path,
-    rel: &str,
-    bytes: &[u8],
-    mtime: i64,
-    size: i64,
-) -> Result<()> {
+/// Read, parse, and tokenize a single file (safe to run in parallel).
+fn prepare_one(
+    repo_root: &Path,
+    abs: &PathBuf,
+    existing: &HashMap<String, db::DocStat>,
+) -> FileOutcome {
+    let rel = rel_path(repo_root, abs);
+    let meta = match std::fs::metadata(abs) {
+        Ok(m) => m,
+        Err(_) => return FileOutcome::Unchanged(rel),
+    };
+    let mtime = mtime_unix(&meta);
+    let size = meta.len() as i64;
+
+    if let Some(s) = existing.get(&rel)
+        && s.mtime_unix == mtime
+        && s.size_bytes == size
+    {
+        return FileOutcome::Unchanged(rel);
+    }
+
+    let bytes = match std::fs::read(abs) {
+        Ok(b) => b,
+        Err(_) => return FileOutcome::Unchanged(rel),
+    };
+    if std::str::from_utf8(&bytes).is_err() {
+        return FileOutcome::Binary(rel);
+    }
+
     let is_markdown = matches!(
         abs.extension().and_then(|e| e.to_str()),
         Some(e) if e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("mdx")
@@ -106,35 +153,48 @@ fn upsert_one(
         .and_then(|s| s.to_str())
         .unwrap_or("")
         .to_string();
-    let sections = parse::parse(bytes, &stem, is_markdown);
-
-    let id = doc_id(rel);
-    // Replace existing rows/sections.
-    db::delete_doc(conn, &id)?;
-
-    let dir = top_dir(rel).to_string();
+    let sections = parse::parse(&bytes, &stem, is_markdown);
     let total_tokens: i64 = sections.iter().map(|s| s.tokens as i64).sum();
-    let title = derive_title(&sections, bytes, &stem);
+    let title = derive_title(&sections, &bytes, &stem);
+    let is_new = !existing.contains_key(&rel);
 
+    FileOutcome::Ready(Prepared {
+        doc_id: doc_id(&rel),
+        dir: top_dir(&rel).to_string(),
+        rel,
+        title,
+        total_tokens,
+        mtime,
+        size,
+        is_markdown,
+        sections,
+        is_new,
+    })
+}
+
+/// Write a prepared doc to sqlite + tantivy (must be serial).
+fn commit_one(conn: &Connection, search: &SearchIndex, p: &Prepared) -> Result<()> {
+    db::delete_doc(conn, &p.doc_id)?;
     db::upsert_doc(
         conn,
         &DocRow {
-            doc_id: id.clone(),
-            rel_path: rel.to_string(),
-            dir: dir.clone(),
-            title,
-            tokens: total_tokens,
-            mtime_unix: mtime,
-            size_bytes: size,
-            is_markdown,
+            doc_id: p.doc_id.clone(),
+            rel_path: p.rel.clone(),
+            dir: p.dir.clone(),
+            title: p.title.clone(),
+            tokens: p.total_tokens,
+            mtime_unix: p.mtime,
+            size_bytes: p.size,
+            is_markdown: p.is_markdown,
         },
     )?;
+
     // Deduplicate section IDs: when two sections in the same doc have
     // identical content they produce the same hash.  Append a counter
     // suffix to make each ID unique within the doc.
     let mut id_counts: HashMap<String, usize> = HashMap::new();
-    let mut final_ids: Vec<String> = Vec::with_capacity(sections.len());
-    for sec in &sections {
+    let mut final_ids: Vec<String> = Vec::with_capacity(p.sections.len());
+    for sec in &p.sections {
         let n = id_counts.entry(sec.id.clone()).or_insert(0);
         final_ids.push(if *n == 0 {
             sec.id.clone()
@@ -144,11 +204,11 @@ fn upsert_one(
         *n += 1;
     }
 
-    for (seq, (sec, sid)) in sections.iter().zip(final_ids.iter()).enumerate() {
+    for (seq, (sec, sid)) in p.sections.iter().zip(final_ids.iter()).enumerate() {
         db::insert_section(
             conn,
             &SectionRow {
-                doc_id: id.clone(),
+                doc_id: p.doc_id.clone(),
                 section_id: sid.clone(),
                 seq: seq as i64,
                 level: sec.level as i64,
@@ -161,7 +221,7 @@ fn upsert_one(
             },
         )?;
     }
-    search.upsert_sections(&id, rel, &dir, mtime as u64, &sections)?;
+    search.upsert_sections(&p.doc_id, &p.rel, &p.dir, p.mtime as u64, &p.sections)?;
     Ok(())
 }
 
