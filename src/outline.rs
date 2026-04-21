@@ -2,8 +2,6 @@ use crate::{cache, db, repo, search::SearchIndex, sync};
 use anyhow::Result;
 use rusqlite::params;
 
-const AUTO_INDEX_TTL: u64 = 5;
-
 pub fn run(doc_ids: &[String], json: bool, no_auto_index: bool) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let root = repo::find_root(&cwd)?;
@@ -11,7 +9,7 @@ pub fn run(doc_ids: &[String], json: bool, no_auto_index: bool) -> Result<()> {
     let mut conn = db::open(&paths.db)?;
     let mut search = SearchIndex::open(&paths.tantivy)?;
     if !no_auto_index {
-        sync::run_if_stale(&mut conn, &mut search, &root, AUTO_INDEX_TTL, false)?;
+        sync::run_if_stale(&mut conn, &mut search, &root, sync::AUTO_INDEX_TTL, false)?;
     }
 
     if json && doc_ids.len() > 1 {

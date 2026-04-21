@@ -58,7 +58,13 @@ pub fn run(
     let mut conn = crate::db::open(&paths.db)?;
     let mut search = SearchIndex::open(&paths.tantivy)?;
     if !no_auto_index {
-        crate::sync::run_if_stale(&mut conn, &mut search, &root, 5, false)?;
+        crate::sync::run_if_stale(
+            &mut conn,
+            &mut search,
+            &root,
+            crate::sync::AUTO_INDEX_TTL,
+            false,
+        )?;
     }
 
     let hits = search.query(query, limit, snippet)?;

@@ -2,8 +2,6 @@ use crate::{cache, db, repo, search::SearchIndex, sync, token};
 use anyhow::Result;
 use rusqlite::params;
 
-const AUTO_INDEX_TTL: u64 = 5;
-
 pub fn run(
     targets: &[String],
     json: bool,
@@ -18,7 +16,7 @@ pub fn run(
     let mut conn = db::open(&paths.db)?;
     let mut search = SearchIndex::open(&paths.tantivy)?;
     if !no_auto_index {
-        sync::run_if_stale(&mut conn, &mut search, &root, AUTO_INDEX_TTL, false)?;
+        sync::run_if_stale(&mut conn, &mut search, &root, sync::AUTO_INDEX_TTL, false)?;
     }
 
     let parsed = parse_targets(targets);
