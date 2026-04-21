@@ -82,7 +82,7 @@ pub fn run_if_stale(
     let mut seen = std::collections::HashSet::with_capacity(paths.len());
     let mut report = SyncReport::default();
 
-    let tx = conn.transaction()?;
+    let tx = begin_immediate(conn)?;
     for outcome in outcomes {
         match outcome {
             FileOutcome::Unchanged(rel) => {
@@ -117,6 +117,29 @@ pub fn run_if_stale(
     tx.commit()?;
     search.commit()?;
     Ok(report)
+}
+
+fn begin_immediate(conn: &mut Connection) -> Result<rusqlite::Transaction<'_>> {
+    use rusqlite::{ErrorCode, Transaction, TransactionBehavior};
+    use std::thread;
+    use std::time::Duration;
+
+    let mut delay = Duration::from_millis(100);
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+
+    loop {
+        match Transaction::new_unchecked(conn, TransactionBehavior::Immediate) {
+            Ok(tx) => return Ok(tx),
+            Err(ref e)
+                if e.sqlite_error_code() == Some(ErrorCode::DatabaseBusy)
+                    && std::time::Instant::now() < deadline =>
+            {
+                thread::sleep(delay);
+                delay = (delay * 2).min(Duration::from_secs(1));
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
 }
 
 /// Read, parse, and tokenize a single file (safe to run in parallel).

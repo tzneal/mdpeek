@@ -43,11 +43,51 @@ pub struct SectionRow {
 /// Open (or create) the per-repo sqlite DB at `path`, apply migrations,
 /// and return the connection.
 pub fn open(path: &Path) -> Result<Connection> {
+    use rusqlite::ErrorCode;
+    use std::thread;
+    use std::time::Duration;
+
     let conn =
         Connection::open(path).with_context(|| format!("open sqlite at {}", path.display()))?;
+    conn.pragma_update(None, "busy_timeout", "3000")?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
-    conn.pragma_update(None, "journal_mode", "WAL")?;
-    migrate(&conn)?;
+
+    // WAL pragma can fail with BUSY if another connection is mid-transaction.
+    let mut delay = Duration::from_millis(50);
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        match conn.pragma_update(None, "journal_mode", "WAL") {
+            Ok(()) => break,
+            Err(e)
+                if e.sqlite_error_code() == Some(ErrorCode::DatabaseBusy)
+                    && std::time::Instant::now() < deadline =>
+            {
+                thread::sleep(delay);
+                delay = (delay * 2).min(Duration::from_secs(1));
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+
+    let mut delay = Duration::from_millis(50);
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        match migrate(&conn) {
+            Ok(()) => break,
+            Err(e) => {
+                let is_busy = e
+                    .downcast_ref::<rusqlite::Error>()
+                    .and_then(|e| e.sqlite_error_code())
+                    == Some(ErrorCode::DatabaseBusy);
+                if is_busy && std::time::Instant::now() < deadline {
+                    thread::sleep(delay);
+                    delay = (delay * 2).min(Duration::from_secs(1));
+                } else {
+                    return Err(e);
+                }
+            }
+        }
+    }
     Ok(conn)
 }
 
@@ -89,7 +129,6 @@ fn migrate(conn: &Connection) -> Result<()> {
         );
         "#,
     )?;
-    // Stamp the schema version if absent.
     set_meta_if_absent(conn, "schema_version", &SCHEMA_VERSION.to_string())?;
     Ok(())
 }
