@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Shared test harness for mdpeek end-to-end tests.
 //!
 //! Each test creates an isolated fake repo + XDG cache so state

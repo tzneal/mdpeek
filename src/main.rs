@@ -11,6 +11,7 @@ mod repo;
 mod search;
 mod show;
 mod sync;
+mod toc;
 mod token;
 
 #[derive(Parser)]
@@ -46,6 +47,8 @@ enum Cmd {
     },
     /// Layer 2: headings + first-sentence snippets for one or more docs
     Outline { doc_ids: Vec<String> },
+    /// Cross-doc table of contents: headings for every indexed doc in one call
+    Toc,
     /// Layer 3: full doc or a single section (doc-id[:section-id] or doc-id section-id)
     Show {
         /// One or more targets: doc-id, path, doc-id:section-id
@@ -111,6 +114,21 @@ WHEN TO USE
   2. Outline — headings + first-sentence snippets per section
   3. Show   — full doc or a single section addressed by content hash
 
+DO NOT USE
+  - For exploring source code — mdpeek only indexes .md, .mdx, and .txt
+  - For reading a single small file you already know the path to; read it
+    directly instead
+  - For content in files excluded by .gitignore or the repo's ignore list
+
+DECISION TREE
+  \"What docs exist here?\"                → mdpeek index
+  \"What's the structure across the repo?\" → mdpeek toc
+  \"What's in <doc>?\"                     → mdpeek outline <doc>
+  \"Which doc mentions X?\"                → mdpeek search \"X\"
+  \"Read section Y of <doc>\"              → mdpeek show <doc>:<sec>
+  \"Read content about X within a budget\" → mdpeek search \"X\" \\
+                                            --include-content --max-tokens 400
+
 COMMANDS
   mdpeek index [path]
     Layer 1: force-reindex and list all docs grouped by directory.
@@ -129,6 +147,14 @@ COMMANDS
       mdpeek outline docs/install.md     # by file path
       mdpeek outline a3f1 b208           # multiple docs at once
       mdpeek --json outline a3f1b208     # structured output
+
+  mdpeek toc
+    Cross-doc table of contents: headings (no snippets) for every
+    indexed doc in a single call. Use this instead of running outline
+    over each doc when you want a whole-repo structural picture.
+    Each section shows its ID, heading, and token count.
+      mdpeek toc                         # plain text, all docs
+      mdpeek --json toc                  # structured output
 
   mdpeek show <target>...
     Layer 3: print full doc content, or a single section slice.
@@ -200,6 +226,7 @@ TYPICAL WORKFLOW
 JSON OUTPUT
   index:   {repo_root, total_docs, total_tokens, groups:[{dir, docs:[{id, path, title, tokens, section_count, modified}]}]}
   outline: {doc_id, path, total_tokens, sections:[{id, level, heading, snippet, tokens, code_tokens}]}
+  toc:     [{doc_id, path, total_tokens, sections:[{id, level, heading, heading_path, tokens}]}]
   show:    {doc_id, path, section_id?, heading?, tokens, content,
            start_token?, end_token?, truncated?}  (budget fields when --max-tokens set)
   search:  [{doc_id, section_id, path, heading_path, tokens, score, snippet?,
@@ -242,6 +269,7 @@ fn run(cmd: Cmd, json: bool, no_auto_index: bool) -> anyhow::Result<()> {
     match cmd {
         Cmd::Index { path } => index::run(path, json, no_auto_index),
         Cmd::Outline { doc_ids } => outline::run(&doc_ids, json, no_auto_index),
+        Cmd::Toc => toc::run(json, no_auto_index),
         Cmd::Show {
             targets,
             max_tokens,
