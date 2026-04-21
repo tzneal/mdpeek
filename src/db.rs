@@ -40,6 +40,30 @@ pub struct SectionRow {
     pub content: Vec<u8>,
 }
 
+pub fn section_outlines(conn: &Connection, doc_id: &str) -> Result<Vec<SectionRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT section_id, seq, level, heading, heading_path, snippet, tokens, code_tokens, content \
+         FROM sections WHERE doc_id = ?1 ORDER BY seq",
+    )?;
+    let rows = stmt
+        .query_map(params![doc_id], |r| {
+            Ok(SectionRow {
+                doc_id: doc_id.to_string(),
+                section_id: r.get(0)?,
+                seq: r.get(1)?,
+                level: r.get(2)?,
+                heading: r.get(3)?,
+                heading_path: r.get(4)?,
+                snippet: r.get(5)?,
+                tokens: r.get(6)?,
+                code_tokens: r.get(7)?,
+                content: r.get(8)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
 /// Open (or create) the per-repo sqlite DB at `path`, apply migrations,
 /// and return the connection.
 pub fn open(path: &Path) -> Result<Connection> {
@@ -92,6 +116,8 @@ pub fn open(path: &Path) -> Result<Connection> {
 }
 
 fn migrate(conn: &Connection) -> Result<()> {
+    // Use IMMEDIATE so busy_timeout applies to the lock acquisition.
+    conn.execute_batch("BEGIN IMMEDIATE")?;
     conn.execute_batch(
         r#"
         CREATE TABLE IF NOT EXISTS meta (
@@ -130,6 +156,7 @@ fn migrate(conn: &Connection) -> Result<()> {
         "#,
     )?;
     set_meta_if_absent(conn, "schema_version", &SCHEMA_VERSION.to_string())?;
+    conn.execute_batch("COMMIT")?;
     Ok(())
 }
 

@@ -225,7 +225,7 @@ TYPICAL WORKFLOW
 
 JSON OUTPUT
   index:   {repo_root, total_docs, total_tokens, groups:[{dir, docs:[{id, path, title, tokens, section_count, modified}]}]}
-  outline: {doc_id, path, total_tokens, sections:[{id, level, heading, snippet, tokens, code_tokens}]}
+  outline: {doc_id, path, total_tokens, sections:[{id, level, heading, heading_path, snippet, tokens, code_tokens}]}
   toc:     [{doc_id, path, total_tokens, sections:[{id, level, heading, heading_path, tokens}]}]
   show:    {doc_id, path, section_id?, heading?, tokens, content,
            start_token?, end_token?, truncated?}  (budget fields when --max-tokens set)
