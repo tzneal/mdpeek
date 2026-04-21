@@ -197,22 +197,28 @@ fn top_dir(rel: &str) -> &str {
     rel.split_once('/').map(|(d, _)| d).unwrap_or("")
 }
 
-/// First H1; else first non-empty line; else filename stem.
+/// First H1; else first non-empty line with ≥2 alphanumeric words; else stem.
 fn derive_title(sections: &[Section], bytes: &[u8], stem: &str) -> String {
     if let Some(h) = sections.iter().find(|s| s.level == 1)
-        && !h.heading.is_empty()
+        && has_enough_words(&h.heading)
     {
         return h.heading.clone();
     }
     if let Ok(text) = std::str::from_utf8(bytes) {
         for line in text.lines() {
-            let t = line.trim();
-            if !t.is_empty() {
-                return t.trim_start_matches('#').trim().to_string();
+            let t = line.trim().trim_start_matches('#').trim();
+            if has_enough_words(t) {
+                return t.to_string();
             }
         }
     }
     stem.to_string()
+}
+
+/// At least 1 word containing an alphanumeric character.
+fn has_enough_words(s: &str) -> bool {
+    s.split_whitespace()
+        .any(|w| w.chars().any(|c| c.is_alphanumeric()))
 }
 
 #[cfg(test)]
