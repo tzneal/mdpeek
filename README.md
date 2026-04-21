@@ -3,10 +3,18 @@
 Progressive-disclosure CLI for markdown/text docs in a monorepo.
 Designed for LLM consumption — non-interactive, structured I/O.
 
-## Install
+## Installation
 
-```
+```bash
 cargo install --path .
+```
+
+### Kiro CLI setup
+
+Generate a steering file so the Kiro CLI knows how to use mdpeek:
+
+```bash
+mdpeek --llm-help > ~/.kiro/steering/mdpeek.md
 ```
 
 ## Quick start
