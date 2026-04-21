@@ -1,3 +1,4 @@
+use crate::db::SectionRow;
 use crate::{cache, db, repo, search::SearchIndex, sync};
 use anyhow::Result;
 use rusqlite::params;
@@ -33,7 +34,7 @@ fn outline_one(conn: &rusqlite::Connection, input: &str, json: bool) -> Result<(
         params![doc_id],
         |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)),
     )?;
-    let sections = fetch_sections(conn, &doc_id)?;
+    let sections = db::section_outlines(conn, &doc_id)?;
     if json {
         println!(
             "{}",
@@ -55,7 +56,7 @@ fn outline_one_json(conn: &rusqlite::Connection, input: &str) -> Result<serde_js
         params![doc_id],
         |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)),
     )?;
-    let sections = fetch_sections(conn, &doc_id)?;
+    let sections = db::section_outlines(conn, &doc_id)?;
     Ok(render_json_value(
         &doc_id,
         &rel_path,
@@ -64,36 +65,7 @@ fn outline_one_json(conn: &rusqlite::Connection, input: &str) -> Result<serde_js
     ))
 }
 
-struct Sec {
-    section_id: String,
-    level: i64,
-    heading: String,
-    snippet: String,
-    tokens: i64,
-    code_tokens: i64,
-}
-
-fn fetch_sections(conn: &rusqlite::Connection, doc_id: &str) -> Result<Vec<Sec>> {
-    let mut stmt = conn.prepare(
-        "SELECT section_id, level, heading, snippet, tokens, code_tokens \
-         FROM sections WHERE doc_id = ?1 ORDER BY seq",
-    )?;
-    let rows = stmt
-        .query_map(params![doc_id], |r| {
-            Ok(Sec {
-                section_id: r.get(0)?,
-                level: r.get(1)?,
-                heading: r.get(2)?,
-                snippet: r.get(3)?,
-                tokens: r.get(4)?,
-                code_tokens: r.get(5)?,
-            })
-        })?
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(rows)
-}
-
-fn render_text(doc_id: &str, rel_path: &str, total_tokens: i64, sections: &[Sec]) -> String {
+fn render_text(doc_id: &str, rel_path: &str, total_tokens: i64, sections: &[SectionRow]) -> String {
     let mut out = format!("{rel_path}  [{doc_id}]  {total_tokens} tokens\n\n");
     for s in sections {
         let prefix = "#".repeat(s.level.max(1) as usize);
@@ -114,7 +86,7 @@ fn render_text(doc_id: &str, rel_path: &str, total_tokens: i64, sections: &[Sec]
     out
 }
 
-fn render_json(doc_id: &str, rel_path: &str, total_tokens: i64, sections: &[Sec]) -> String {
+fn render_json(doc_id: &str, rel_path: &str, total_tokens: i64, sections: &[SectionRow]) -> String {
     render_json_value(doc_id, rel_path, total_tokens, sections).to_string()
 }
 
@@ -122,7 +94,7 @@ fn render_json_value(
     doc_id: &str,
     rel_path: &str,
     total_tokens: i64,
-    sections: &[Sec],
+    sections: &[SectionRow],
 ) -> serde_json::Value {
     use serde_json::json;
     let secs: Vec<_> = sections
@@ -132,6 +104,7 @@ fn render_json_value(
                 "id": s.section_id,
                 "level": s.level,
                 "heading": s.heading,
+                "heading_path": s.heading_path,
                 "snippet": s.snippet,
                 "tokens": s.tokens,
                 "code_tokens": s.code_tokens,
